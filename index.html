@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stack Frame Visualizer</title>
+  <style>
+    body { font-family: monospace; background: #111; color: #eee; padding: 20px; display: flex; gap: 40px; }
+    .left { flex: 1; }
+    .right { flex: 1; max-height: 500px; overflow-y: auto; }
+    .stack { display: flex; flex-direction: column-reverse; border: 1px solid #666; width: 100%; }
+    .cell { padding: 10px; border-top: 1px solid #555; position: relative; }
+    .cell.highlight { background-color: #334; }
+    .registers, .instructions { margin-bottom: 20px; }
+    .label { color: #0ff; font-weight: bold; }
+    .highlight-rbp::after { content: "<-- RBP"; color: #0f0; position: absolute; right: 10px; }
+    .highlight-rsp::after { content: "<-- RSP"; color: #f0f; position: absolute; right: 10px; }
+    .cell-label { font-size: 0.8em; color: #aaa; display: block; margin-top: 5px; }
+    .breakpoint { background-color: #500; }
+    .animated { transition: background-color 0.5s ease; }
+    button { margin-right: 10px; }
+    .log-box { background: #222; padding: 10px; border: 1px solid #444; height: 150px; overflow-y: auto; white-space: pre-line; }
+  </style>
+</head>
+<body>
+  <div class="left">
+    <h2>Stack Frame Visualizer</h2>
+
+    <div class="registers">
+      <p><span class="label">RBP:</span> <span id="rbp">0x0010</span></p>
+      <p><span class="label">RSP:</span> <span id="rsp">0x0010</span></p>
+    </div>
+
+    <div class="instructions">
+      <p><strong>Instructions:</strong></p>
+      <ol id="code">
+        <li>push rbp</li>
+        <li>mov rbp, rsp</li>
+        <li>sub rsp, 8</li>
+        <li>mov [rbp-4], 0x10</li>
+        <li>mov [rbp-8], 0x20</li>
+        <li>add rsp, 8</li>
+        <li>pop rbp</li>
+      </ol>
+    </div>
+
+    <button onclick="nextInstruction()">Next Instruction</button>
+    <button onclick="reset()">Reset</button>
+
+    <h3>Execution Log:</h3>
+    <div class="log-box" id="log"></div>
+  </div>
+
+  <div class="right">
+    <div class="stack" id="stack"></div>
+  </div>
+
+  <script>
+    const stackEl = document.getElementById("stack");
+    const rbpEl = document.getElementById("rbp");
+    const rspEl = document.getElementById("rsp");
+    const codeEls = document.querySelectorAll("#code li");
+    const logEl = document.getElementById("log");
+
+    let memory, rsp, rbp, ip, highlighted;
+
+    function init() {
+      memory = new Array(32).fill(null);
+      rsp = 0x10;
+      rbp = 0x10;
+      ip = 0;
+      highlighted = null;
+      rbpEl.textContent = `0x${rbp.toString(16).padStart(4, '0')}`;
+      rspEl.textContent = `0x${rsp.toString(16).padStart(4, '0')}`;
+      codeEls.forEach(el => el.style.background = "");
+      logEl.textContent = "";
+      renderStack();
+    }
+
+    function log(msg) {
+      logEl.textContent += msg + "\n";
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function renderStack() {
+      stackEl.innerHTML = "";
+      for (let i = memory.length - 1; i >= 0; i--) {
+        const addr = i * 4;
+        const val = memory[i];
+        const div = document.createElement("div");
+        div.classList.add("cell", "animated");
+        div.textContent = `[0x${addr.toString(16).padStart(4, '0')}] : ${val !== null ? val : ''}`;
+
+        if (addr === rbp) div.classList.add("highlight-rbp");
+        if (addr === rsp) div.classList.add("highlight-rsp");
+
+        const label = document.createElement("span");
+        if (val === 0x10) label.textContent = "[rbp-4]";
+        else if (val === 0x20) label.textContent = "[rbp-8]";
+        if (label.textContent) label.className = "cell-label";
+
+        div.appendChild(label);
+        stackEl.appendChild(div);
+      }
+    }
+
+    function nextInstruction() {
+      if (highlighted === null && ip < codeEls.length) {
+        codeEls.forEach(el => el.style.background = "");
+        codeEls[ip].style.background = "#336";
+        highlighted = ip;
+      } else if (highlighted !== null) {
+        execute(highlighted);
+        highlighted = null;
+        codeEls.forEach(el => el.style.background = "");
+        ip++;
+      }
+    }
+
+    function execute(current) {
+      switch (current) {
+        case 0:
+          rsp -= 4;
+          memory[rsp / 4] = `old_rbp (${rbp})`;
+          log("push rbp -> stored old RBP on top of the stack");
+          break;
+        case 1:
+          rbp = rsp;
+          log("mov rbp, rsp -> updated RBP to RSP value (now both RBP and RSP point to the same location in memory)");
+          break;
+        case 2:
+          rsp -= 8;
+          log("sub rsp, 8 -> reserved 8 bytes on stack");
+          break;
+        case 3:
+          memory[(rbp - 4) / 4] = 0x10;
+          log("mov [rbp-4], 0x10 -> stored value 0x10");
+          break;
+        case 4:
+          memory[(rbp - 8) / 4] = 0x20;
+          log("mov [rbp-8], 0x20 -> stored value 0x20");
+          break;
+        case 5:
+          memory[(rbp - 4) / 4] = null;
+          memory[(rbp - 8) / 4] = null;
+          rsp += 8;
+          log("add rsp, 8 -> deallocated 8 bytes and cleared values 0x10 and 0x20");
+          break;
+        case 6:
+          rbp = memory[rsp / 4];
+          memory[rsp / 4] = null;
+          rsp += 4;
+          log("pop rbp -> restored old RBP");
+          break;
+      }
+
+      rbpEl.textContent = `0x${rbp.toString(16).padStart(4, '0')}`;
+      rspEl.textContent = `0x${rsp.toString(16).padStart(4, '0')}`;
+      renderStack();
+    }
+
+    function reset() {
+      init();
+    }
+
+    init();
+  </script>
+</body>
+</html>
+
